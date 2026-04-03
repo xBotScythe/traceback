@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+dist/
+build/
+venv/
+data/finetune/output/
+.DS_Store
+*.txt
+!requirements.txt
