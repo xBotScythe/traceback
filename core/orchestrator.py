@@ -149,8 +149,31 @@ def merge_results(executed: list[dict]) -> tuple[dict, list[dict]]:
     return primary, supplementary
 
 
+def _disambiguate_query(query: str, hints: list) -> str:
+    """Append a couple session hints to a web search query to help
+    search engines disambiguate common names from prior context."""
+    if not hints:
+        return query
+    # don't re-add terms that are already in the query
+    lower_q = query.lower()
+    extra = []
+    for hint in hints:
+        if hint.lower() not in lower_q and len(hint) >= 3:
+            extra.append(hint)
+        if len(extra) >= 2:
+            break
+    if extra:
+        return f"{query} {' '.join(extra)}"
+    return query
+
+
 def run(intent: dict, session_hints: list = None, progress=True) -> tuple[dict, list[dict]]:
     """Plan, execute, and merge."""
+    # for web searches, inject session context into the query for disambiguation
+    if intent["type"] == "web_search" and session_hints:
+        intent = dict(intent)
+        intent["value"] = _disambiguate_query(intent["value"], session_hints)
+
     jobs = plan(intent)
     executed = execute(jobs, session_hints=session_hints, progress=progress)
     primary, supplementary = merge_results(executed)

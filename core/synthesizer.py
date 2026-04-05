@@ -43,11 +43,14 @@ End with Sources: listing profile URLs.""",
 {_BASE_RULES} End with Sources: listing relevant URLs.""",
 
     "web_search": f"""Traceback, an OSINT tool. Summarize what these search results reveal about the subject.
-Skip results about the wrong person. Use prior findings to filter.
+IMPORTANT: Results marked [low] are likely about a DIFFERENT person — do NOT include them.
+If a result's job title, location, or employer contradicts prior findings, it's a different person. Skip it entirely.
+Use prior findings to confirm identity before including new info.
 {_BASE_RULES} End with Sources: listing URLs you used.""",
 
     "person": f"""Traceback, an OSINT tool. Summarize what these results reveal about this person.
-Skip results about a different person with the same name.
+IMPORTANT: Results marked [low] are likely about a DIFFERENT person — do NOT include them.
+If a result's job title, location, or employer contradicts prior findings, it's a different person. Skip it entirely.
 {_BASE_RULES} End with Sources: listing URLs you used. Use [1] [2] [3] for next steps.""",
 }
 
@@ -58,8 +61,9 @@ CHAT_SYSTEM = """Traceback, an OSINT tool in a terminal. Be brief.
 Only reference what you've actually found. No markdown. Plain text only."""
 
 INVESTIGATE_SYSTEM = f"""Traceback, investigating a person in a terminal.
-Skip results about the wrong person. {_BASE_RULES}
-End with Sources: listing URLs. Use [1] [2] [3] for next steps."""
+Results marked [low] are about a DIFFERENT person — do NOT include them.
+If a result contradicts known facts (wrong job, wrong location), skip it entirely.
+{_BASE_RULES} End with Sources: listing URLs. Use [1] [2] [3] for next steps."""
 
 
 
@@ -183,19 +187,18 @@ def _relevance_filter(results: list, query: str, user_input: str,
 
         name_hits = sum(1 for t in name_terms if t in text)
         context_hits = sum(1 for t in context_terms if t in text)
-        # context terms are worth 3x name terms
         score = name_hits + (context_hits * 3)
 
-        # if result matches the name but ZERO context, it's probably
-        # a different person with the same name — penalize heavily
-        if name_hits > 0 and context_hits == 0 and context_terms:
-            score = 0
+        # name match but zero context = almost certainly a different person
+        # drop entirely when we have context to disambiguate with
+        if name_hits > 0 and context_hits == 0 and len(context_terms) >= 2:
+            continue
 
         scored.append((score, r))
 
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    # tag each result with a confidence hint for the LLM
+    # tag results with confidence for the LLM
     max_score = scored[0][0] if scored else 1
     for score, r in scored:
         if isinstance(r, dict):
@@ -210,7 +213,10 @@ def _relevance_filter(results: list, query: str, user_input: str,
             else:
                 r["_confidence"] = "low"
 
+    # drop low confidence results entirely — don't let the LLM see them
     relevant = [r for score, r in scored if score > 0]
+    relevant = [r for r in relevant
+                if not isinstance(r, dict) or r.get("_confidence") != "low"]
     if not relevant:
         relevant = [r for _, r in scored[:10]]
 
