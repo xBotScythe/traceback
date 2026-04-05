@@ -84,10 +84,10 @@ def _simplify_results(results: list, limit: int = 20) -> str:
             status_val = item.get("status", "")
 
             if title and url:
-                # give title and url, trim snippet to just key info
-                line = f"  {i}. {title} | {url}"
+                conf = item.get("_confidence", "")
+                tag = f" [{conf}]" if conf else ""
+                line = f"  {i}.{tag} {title} | {url}"
                 if snippet:
-                    # only first ~150 chars, just enough for context
                     line += f" | {snippet[:150].strip()}"
                 lines.append(line)
             elif service:
@@ -194,6 +194,22 @@ def _relevance_filter(results: list, query: str, user_input: str,
         scored.append((score, r))
 
     scored.sort(key=lambda x: x[0], reverse=True)
+
+    # tag each result with a confidence hint for the LLM
+    max_score = scored[0][0] if scored else 1
+    for score, r in scored:
+        if isinstance(r, dict):
+            if max_score > 0:
+                ratio = score / max_score
+                if ratio >= 0.6:
+                    r["_confidence"] = "high"
+                elif ratio >= 0.3:
+                    r["_confidence"] = "medium"
+                else:
+                    r["_confidence"] = "low"
+            else:
+                r["_confidence"] = "low"
+
     relevant = [r for score, r in scored if score > 0]
     if not relevant:
         relevant = [r for _, r in scored[:10]]
