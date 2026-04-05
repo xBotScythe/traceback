@@ -53,32 +53,46 @@ def _resolve_pronouns(text: str, session) -> str:
 
 
 def _extract_target(text: str) -> dict | None:
-    """Fast extraction for unambiguous targets only.
-
-    Only catches things that are obviously a specific lookup type:
-    - emails: test@example.com
-    - domains: example.com
-    - @mentions: @username
-
-    Everything else goes to the LLM intent parser which can understand
-    context, new information, and conversational nuance.
-    """
+    """Fast regex extraction so obvious inputs skip the LLM entirely."""
     import re
+    lower = text.lower().strip()
 
     # email
     m = re.search(r'[\w.+-]+@[\w-]+\.[\w.]+', text)
     if m:
         return {"type": "email_lookup", "value": m.group()}
 
+    # phone number (7+ digits with optional +, dashes, parens, spaces)
+    m = re.search(r'(\+?[\d][\d\s\-().]{6,}\d)', text)
+    if m:
+        digits = re.sub(r'[^\d+]', '', m.group(1))
+        if len(digits) >= 7:
+            return {"type": "phone_lookup", "value": m.group(1).strip()}
+
     # domain (has a dot, looks like a domain, not an email)
     m = re.search(r'\b([\w-]+\.(?:com|org|net|io|dev|co|me|info|edu|gov)\b)', text, re.IGNORECASE)
     if m:
         return {"type": "domain_lookup", "value": m.group(1)}
 
-    # @username (explicit mention)
+    # "who is Firstname Lastname" -> person lookup
+    m = re.match(r'(?:who\s+is|find\s+info\s+on|look\s+up|investigate)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*$', text.strip())
+    if m:
+        return {"type": "person_lookup", "value": m.group(1)}
+
+    # "find accounts for X" / "what platforms is X on" -> username lookup
+    m = re.match(r'(?:find\s+accounts?\s+for(?:\s+username)?\s+|what\s+platforms?\s+is\s+)(\w{3,30})', lower)
+    if m:
+        return {"type": "username_lookup", "value": m.group(1)}
+
+    # @username
     m = re.search(r'@(\w{3,30})\b', text)
     if m:
         return {"type": "username_lookup", "value": m.group(1).lstrip("@")}
+
+    # "search for X" / "search the web for X" / "google X" -> web search
+    m = re.match(r'(?:search\s+(?:the\s+web\s+)?for|google)\s+(.+)', lower)
+    if m:
+        return {"type": "web_search", "value": m.group(1).strip()}
 
     return None
 
