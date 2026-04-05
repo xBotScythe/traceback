@@ -10,3 +10,4 @@ data/finetune/output/
 .DS_Store
 *.txt
 !requirements.txt
+.traceback_config.json

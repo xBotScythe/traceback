@@ -22,3 +22,10 @@ def dispatch(intent: dict) -> dict:
 
     fn = TOOL_REGISTRY[intent_type]
     return fn(value)
+
+
+def call_tool(intent_type: str, value: str, **kwargs) -> dict:
+    """Call a registered tool directly by type and value."""
+    if intent_type not in TOOL_REGISTRY:
+        return {"tool": None, "query": value, "error": f"No tool for intent type: {intent_type}"}
+    return TOOL_REGISTRY[intent_type](value, **kwargs)

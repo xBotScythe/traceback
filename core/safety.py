@@ -1,6 +1,6 @@
-"""Ethics filter — blocks hard-banned queries and detects escalation patterns."""
+"""Safety filter for blocking harmful queries."""
 
-# Always blocked, no matter what
+# always blocked
 HARD_BLOCKED = [
     "dox",
     "doxx",
@@ -15,7 +15,7 @@ HARD_BLOCKED = [
     "password for",
 ]
 
-# Sensitive but allowed occasionally — flagged if repeated
+# allowed once, blocked if spammed
 SOFT_FLAGGED = [
     "home address",
     "where does",
@@ -41,12 +41,12 @@ SOFT_DECLINE = (
     "Try a different kind of query."
 )
 
-# How many soft-flagged queries in a row before blocking
+# how many soft flags in a row before we cut them off
 SOFT_LIMIT = 2
 
 
 class SafetyFilter:
-    """Stateful safety filter that tracks escalation patterns."""
+    """Tracks repeated sketchy queries and blocks when needed."""
 
     def __init__(self):
         self._soft_streak = 0
@@ -55,18 +55,16 @@ class SafetyFilter:
         """Check input for safety. Returns None if safe, or a decline message string."""
         lower = user_input.lower()
 
-        # Hard block — always rejected
         if any(phrase in lower for phrase in HARD_BLOCKED):
             self._soft_streak = 0
             return HARD_DECLINE
 
-        # Soft flag — allowed unless repeated
         if any(phrase in lower for phrase in SOFT_FLAGGED):
             self._soft_streak += 1
             if self._soft_streak >= SOFT_LIMIT:
                 return SOFT_DECLINE
-            return None  # first one is fine
+            return None
 
-        # Clean query resets the streak
+        # clean query resets the streak
         self._soft_streak = 0
         return None

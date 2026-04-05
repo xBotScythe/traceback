@@ -1,3 +1,6 @@
 sherlock-project
 holehe
 python-whois
+phonenumbers
+ddgs
+googlesearch-python

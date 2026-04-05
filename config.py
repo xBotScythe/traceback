@@ -1,16 +1,36 @@
-"""Configuration for OSINT CLI."""
+"""Configuration for Traceback OSINT CLI."""
 
-# Ollama settings
-OLLAMA_MODEL = "llama3.2:3b"
 OLLAMA_BASE_URL = "http://localhost:11434"
 
-# Inference tuning (conservative for local hardware)
+# these get overwritten by setup.py on first run
+OLLAMA_MODEL = "llama3.1:8b"
 OLLAMA_OPTIONS = {
     "temperature": 0.1,
-    "num_ctx": 4096,
-    "num_predict": 2048,
+    "num_ctx": 8192,
+    "num_predict": 4096,
 }
 
-# Optional API keys — leave empty to skip those tools
-HIBP_API_KEY = ""
-SHODAN_API_KEY = ""
+# hardware tier - controls concurrency and supplementary searches
+TIER = "low"
+
+# how many tools can run at once per tier
+TIER_MAX_WORKERS = {
+    "low": 2,
+    "mid": 3,
+    "high": 4,
+}
+
+# all tiers get web enrichment now since smallest model is 8b
+TIER_WEB_ENRICH = {
+    "low": True,
+    "mid": True,
+    "high": True,
+}
+
+
+def apply_model_config(model_config: dict):
+    """Apply model settings from first-run setup."""
+    global OLLAMA_MODEL, OLLAMA_OPTIONS, TIER
+    OLLAMA_MODEL = model_config["model"]
+    OLLAMA_OPTIONS = model_config["options"]
+    TIER = model_config.get("tier", "low")

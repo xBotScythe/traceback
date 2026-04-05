@@ -1,62 +1,279 @@
-"""Format raw tool output as readable prose via LLM."""
+"""Formats tool output and handles conversation."""
 
 import json
 
+import config
 from core import llm
 
 
-SYSTEM_PROMPT = """You are an OSINT analyst writing a report. The user asked a question and a tool returned results as JSON. Write a detailed synopsis.
-
-Your response MUST include:
-
-1. An opening statement summarizing the overall finding (e.g. "The username X has a significant online presence across N platforms.")
-
-2. A numbered list of EVERY platform/URL/service found. For each one, include the platform name and full URL. Do not skip any.
-
-3. A breakdown by category. Group the results into categories like:
-   - Social media (Twitter, TikTok, Instagram, etc.)
-   - Developer/tech (GitHub, GitLab, Stack Overflow, etc.)
-   - Gaming (Steam, Roblox, Xbox, etc.)
-   - Content/media (YouTube, Twitch, SoundCloud, etc.)
-   - Forums/communities (Reddit, Discord, etc.)
-   - Other
-   Only include categories that have results.
-
-4. A brief analytical closing — what this footprint suggests about the target (active user, niche interests, broad presence, etc.)
-
-Additional rules:
-- Only describe what is in the data. Do not invent results.
-- If the user asked for a specific tone or style in their original request, follow it throughout.
-- If prior session context is provided, weave it into the analysis.
-- Plain text only, no markdown formatting."""
-
-FOLLOWUP_SYSTEM = """You are an OSINT analyst assistant. The user is asking a follow-up question about results from a previous lookup. Give a detailed answer based ONLY on the data provided. If the answer isn't in the data, say so. Do not make anything up. If the user asks for a specific tone or style, follow it. Plain text only."""
+# context budgets per tier (characters, not tokens - rough approximation)
+# keeps prompts from overwhelming smaller models
+_CONTEXT_BUDGETS = {
+    "low": {"system": 1000, "results": 4000, "conversation": 2000, "knowledge": 2000},
+    "mid": {"system": 1500, "results": 6000, "conversation": 3000, "knowledge": 3000},
+    "high": {"system": 2000, "results": 8000, "conversation": 4000, "knowledge": 4000},
+}
 
 
-def format(tool_output: dict, prior_context: str = "", user_input: str = "") -> str:
-    """Send raw tool results to LLM and return a prose summary."""
-    data_str = json.dumps(tool_output, indent=2)
-    prompt = f"User's original request: {user_input}\n\nTool results:\n{data_str}"
-    if prior_context:
-        prompt += f"\n\nPrior session context: {prior_context}"
+def _budget(key: str) -> int:
+    tier = getattr(config, "TIER", "low")
+    return _CONTEXT_BUDGETS.get(tier, _CONTEXT_BUDGETS["low"]).get(key, 1000)
+
+
+def _trim(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n  ... (trimmed)"
+
+
+SUMMARY_SYSTEM = """You are Traceback, an OSINT tool in a plain text terminal. Talk directly to the person.
+
+Rules:
+- SKIP results about the wrong person. Do not mention them.
+- If info conflicts (e.g. high school vs college), use the most recent.
+- Use prior findings to filter. Only state facts from results.
+- Be brief. Answer what was asked, nothing more.
+- No markdown. No [text](url) links. Raw URLs only.
+- End with "Sources:" listing URLs you used.
+- Use [1] [2] [3] for next steps."""
+
+CHAT_SYSTEM = """You are Traceback, an OSINT tool in a terminal. Be brief.
+- Only reference what you've actually found. Do not invent results.
+- No markdown. Plain text only."""
+
+INVESTIGATE_SYSTEM = """You are Traceback, investigating a person in a terminal.
+
+Rules:
+- SKIP results about the wrong person entirely.
+- Only state facts from the results.
+- Be brief. No markdown. Paste raw URLs.
+- End with "Sources:" listing URLs you used.
+- Use [1] [2] [3] for next steps."""
+
+
+
+def _simplify_results(results: list, limit: int = 20) -> str:
+    """Turn a list of result dicts into compact data for the LLM to interpret.
+
+    Gives the LLM enough to summarize from, but keeps it compact so it doesn't
+    just regurgitate raw text.
+    """
+    if not results:
+        return "(no results)"
+
+    lines = []
+    for i, item in enumerate(results[:limit], 1):
+        if isinstance(item, str):
+            lines.append(f"  {i}. {item}")
+        elif isinstance(item, dict):
+            title = item.get("title", "")
+            url = item.get("url", "")
+            snippet = item.get("snippet", item.get("body", ""))
+            service = item.get("service", "")
+            status_val = item.get("status", "")
+
+            if title and url:
+                # give title and url, trim snippet to just key info
+                line = f"  {i}. {title} | {url}"
+                if snippet:
+                    # only first ~150 chars, just enough for context
+                    line += f" | {snippet[:150].strip()}"
+                lines.append(line)
+            elif service:
+                line = f"  {i}. {service}"
+                if status_val:
+                    line += f" [{status_val}]"
+                if url:
+                    line += f" | {url}"
+                lines.append(line)
+            elif url:
+                lines.append(f"  {i}. {url}")
+            else:
+                lines.append(f"  {i}. {json.dumps(item)}")
+
+    if len(results) > limit:
+        lines.append(f"  ... and {len(results) - limit} more results")
+
+    return "\n".join(lines)
+
+
+def _simplify_dict_results(data: dict) -> str:
+    """Turn nested dict results (like domain/phone) into readable text."""
+    lines = []
+    for section, content in data.items():
+        if isinstance(content, dict):
+            lines.append(f"  {section}:")
+            for k, v in content.items():
+                if v:
+                    lines.append(f"    {k}: {v}")
+        elif isinstance(content, list):
+            lines.append(f"  {section}:")
+            for item in content[:20]:
+                if isinstance(item, dict):
+                    parts = [f"{k}: {v}" for k, v in item.items() if v]
+                    lines.append(f"    - {', '.join(parts)}")
+                else:
+                    lines.append(f"    - {item}")
+        elif content:
+            lines.append(f"  {section}: {content}")
+    return "\n".join(lines)
+
+
+
+def _relevance_filter(results: list, query: str, user_input: str,
+                      full_knowledge: str) -> list:
+    """Score and filter results so the LLM only sees relevant ones.
+
+    Splits terms into "name" (the person's name) and "context" (everything
+    else like job title, school, company). Results that match the name but
+    zero context terms are likely a different person with the same name
+    and get dropped.
+    """
+    if not results or not isinstance(results, list):
+        return results
+
+    from tools.websearch import _extract_subject
+
+    filler = {"the", "and", "for", "that", "this", "with", "from", "about",
+              "what", "their", "they", "them", "some", "have", "has", "been",
+              "are", "was", "were", "will", "can", "not", "but", "also",
+              "more", "into", "give", "using", "check", "look", "find",
+              "info", "information", "well", "little", "bit",
+              "site", "com", "www", "https", "http", "html",
+              "linkedin", "github", "twitter", "reddit", "facebook",
+              "instagram", "tiktok", "youtube", "pinterest", "medium",
+              "articles", "career", "staff", "bio", "profile", "website"}
+
+    def _extract_terms(text):
+        terms = set()
+        for word in text.lower().split():
+            clean = word.strip(".,;:()[]\"'/")
+            if len(clean) >= 3 and clean not in filler:
+                terms.add(clean)
+        return terms
+
+    # separate name terms from context terms
+    subject = _extract_subject(query)
+    name_terms = _extract_terms(subject)
+    all_terms = _extract_terms(f"{query} {user_input} {full_knowledge}")
+    context_terms = all_terms - name_terms
+
+    if not all_terms:
+        return results
+
+    scored = []
+    for r in results:
+        if isinstance(r, str):
+            text = r.lower()
+        elif isinstance(r, dict):
+            text = " ".join(str(v) for v in r.values()).lower()
+        else:
+            text = str(r).lower()
+
+        name_hits = sum(1 for t in name_terms if t in text)
+        context_hits = sum(1 for t in context_terms if t in text)
+        # context terms are worth 3x name terms
+        score = name_hits + (context_hits * 3)
+
+        # if result matches the name but ZERO context, it's probably
+        # a different person with the same name — penalize heavily
+        if name_hits > 0 and context_hits == 0 and context_terms:
+            score = 0
+
+        scored.append((score, r))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    relevant = [r for score, r in scored if score > 0]
+    if not relevant:
+        relevant = [r for _, r in scored[:10]]
+
+    # dedup LinkedIn profiles: multiple /in/ URLs = different people, keep best only
+    best_linkedin = None
+    deduped = []
+    for r in relevant:
+        url = r.get("url", "") if isinstance(r, dict) else str(r)
+        if "linkedin.com/in/" in url:
+            if best_linkedin is None:
+                best_linkedin = r
+                deduped.append(r)
+            # skip other linkedin profile URLs (they're different people)
+        else:
+            deduped.append(r)
+
+    return deduped[:15]
+
+
+def format(tool_output: dict, user_input: str = "",
+           conversation: str = "", full_knowledge: str = "",
+           web_enrichment: list = None) -> str:
+    results = tool_output.get("results", [])
+    tool_name = tool_output.get("tool", "unknown")
+    query = tool_output.get("query", "")
+
+    # filter out irrelevant results before the LLM sees them
+    if isinstance(results, list):
+        results = _relevance_filter(results, query, user_input, full_knowledge)
+        data_text = _simplify_results(results)
+    elif isinstance(results, dict):
+        data_text = _simplify_dict_results(results)
+    else:
+        data_text = str(results)
+
+    data_text = _trim(data_text, _budget("results"))
+
+    prompt = f"Question: {user_input}\n\nResults:\n{data_text}"
+
+    if web_enrichment:
+        for enrichment in web_enrichment:
+            enrich_results = enrichment.get("results", [])
+            if enrich_results:
+                prompt += f"\n\n{_trim(_simplify_results(enrich_results, limit=10), _budget('results') // 2)}"
+
+    if full_knowledge:
+        prompt += f"\n\nPrior findings:\n{_trim(full_knowledge, _budget('knowledge'))}"
+    if conversation:
+        prompt += f"\n\nConversation:\n{_trim(conversation, _budget('conversation'))}"
 
     try:
-        return llm.ask(prompt, system=SYSTEM_PROMPT)
+        return llm.ask(prompt, system=SUMMARY_SYSTEM)
     except (ConnectionError, RuntimeError):
         return _fallback_format(tool_output)
 
 
-def followup(question: str, session_data: str) -> str:
-    """Answer a follow-up question using session context."""
-    prompt = f"Session data:\n{session_data}\n\nUser question: {question}"
+def investigate(results: dict, name: str, user_input: str = "",
+                conversation: str = "") -> str:
+    """Present person search results as numbered picks."""
+    result_list = results.get("results", [])
+    result_list = _relevance_filter(result_list, name, user_input, conversation)
+    data_text = _simplify_results(result_list, limit=15)
+    data_text = _trim(data_text, _budget("results"))
+
+    prompt = f"Target: {name}"
+    if user_input:
+        prompt += f"\nUser said: {user_input}"
+    prompt += f"\n\nSearch results:\n{data_text}"
+
+    if conversation:
+        prompt += f"\n\nConversation so far:\n{_trim(conversation, _budget('conversation'))}"
+
     try:
-        return llm.ask(prompt, system=FOLLOWUP_SYSTEM)
+        return llm.ask(prompt, system=INVESTIGATE_SYSTEM)
     except (ConnectionError, RuntimeError):
-        return "[error] Couldn't process follow-up. Try again."
+        return _fallback_format(results)
+
+
+
+def chat(user_input: str, conversation: str) -> str:
+    conv = _trim(conversation, _budget("conversation"))
+    prompt = f"Conversation:\n{conv}\n\nUser: {user_input}"
+    try:
+        response = llm.ask(prompt, system=CHAT_SYSTEM)
+        return response if response.strip() else "Not sure what to make of that. Try a username, email, or domain lookup."
+    except (ConnectionError, RuntimeError):
+        return "Something went wrong. Try again."
 
 
 def _fallback_format(tool_output: dict) -> str:
-    """Plain text fallback if LLM summary fails."""
     tool = tool_output.get("tool", "unknown")
     query = tool_output.get("query", "")
     results = tool_output.get("results", [])
@@ -64,7 +281,17 @@ def _fallback_format(tool_output: dict) -> str:
     if not results:
         return f"No results found for '{query}' using {tool}."
 
-    lines = [f"Found {len(results)} result(s) for '{query}' using {tool}:"]
-    for item in results:
-        lines.append(f"  - {item}")
+    lines = [f"Found {len(results)} result(s) for '{query}':"]
+    for item in results[:20]:
+        if isinstance(item, str):
+            lines.append(f"  - {item}")
+        elif isinstance(item, dict):
+            title = item.get("title", item.get("service", ""))
+            url = item.get("url", "")
+            if title and url:
+                lines.append(f"  - {title} ({url})")
+            elif title:
+                lines.append(f"  - {title}")
+            elif url:
+                lines.append(f"  - {url}")
     return "\n".join(lines)

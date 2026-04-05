@@ -1,65 +1,246 @@
 #!/usr/bin/env python3
-"""Traceback — local AI-powered OSINT tool."""
+"""Traceback - local AI-powered OSINT tool."""
+
+import sys
 
 import config
 from core import llm
 from core.intent import parse
+from core.orchestrator import run as orchestrate
 from core.safety import SafetyFilter
-from core.session import Session
-from core.synthesizer import format as summarize, followup
+from core.session import Session, parse_number_pick
+from core.setup import get_model_config, install_packages
+from core.report import generate as generate_report
+from core.synthesizer import format as summarize, chat, investigate
 from core.ui import *
-from data.finetune.finetune import auto_finetune
-from tools import dispatch
-import tools.username  # register tools
+import tools.username
 import tools.email
 import tools.domain
+import tools.person
+import tools.phone
+import tools.websearch
+
+
+def _thinking(msg="Thinking..."):
+    sys.stdout.write(f"\r  {DIM}[...] {msg}{RESET}   ")
+    sys.stdout.flush()
+
+def _clear():
+    sys.stdout.write("\r" + " " * 60 + "\r")
+    sys.stdout.flush()
+
+
+def _resolve_pronouns(text: str, session) -> str:
+    """Replace 'their', 'them', 'they' with the last looked-up target.
+
+    Turns 'look into their reddit' into 'look into johndoe reddit'
+    so the intent parser and web search can work with it.
+    """
+    import re
+    if not session.last_target:
+        return text
+
+    lower = text.lower()
+    pronouns = ["their", "them", "they", "his", "her", "this user", "that user"]
+    if not any(p in lower for p in pronouns):
+        return text
+
+    target = session.last_target
+    # replace pronouns with the actual target name
+    resolved = re.sub(r"\b(their|them|they|his|her|this user|that user)('s)?\b",
+                      target, text, flags=re.IGNORECASE)
+    return resolved
+
+
+def _extract_target(text: str) -> dict | None:
+    """Fast extraction for unambiguous targets only.
+
+    Only catches things that are obviously a specific lookup type:
+    - emails: test@example.com
+    - domains: example.com
+    - @mentions: @username
+
+    Everything else goes to the LLM intent parser which can understand
+    context, new information, and conversational nuance.
+    """
+    import re
+
+    # email
+    m = re.search(r'[\w.+-]+@[\w-]+\.[\w.]+', text)
+    if m:
+        return {"type": "email_lookup", "value": m.group()}
+
+    # domain (has a dot, looks like a domain, not an email)
+    m = re.search(r'\b([\w-]+\.(?:com|org|net|io|dev|co|me|info|edu|gov)\b)', text, re.IGNORECASE)
+    if m:
+        return {"type": "domain_lookup", "value": m.group(1)}
+
+    # @username (explicit mention)
+    m = re.search(r'@(\w{3,30})\b', text)
+    if m:
+        return {"type": "username_lookup", "value": m.group(1).lstrip("@")}
+
+    return None
 
 
 BANNER = f"""
-{DIM}┌──────────────────────────────────────────────────────────┐{RESET}
-{DIM}│{RESET}                                                          {DIM}│{RESET}
-{DIM}│{RESET}  {BOLD}{CYAN} ▀▀█▀▀ █▀▀█ █▀▀█ █▀▀ █▀▀ █▀▀▄ █▀▀█ █▀▀ █ █  {RESET}  {DIM}│{RESET}
-{DIM}│{RESET}  {BOLD}{CYAN}   █   █▄▄▀ █▄▄█ █   █▀▀ █▀▀▄ █▄▄█ █   █▀▄  {RESET}  {DIM}│{RESET}
-{DIM}│{RESET}  {BOLD}{CYAN}   █   ▀ ▀▀ ▀  ▀ ▀▀▀ ▀▀▀ ▀▀▀  ▀  ▀ ▀▀▀ ▀ ▀  {RESET}  {DIM}│{RESET}
-{DIM}│{RESET}                                                          {DIM}│{RESET}
-{DIM}│{RESET}  {DIM}Local AI-powered OSINT reconnaissance tool{RESET}              {DIM}│{RESET}
-{DIM}│{RESET}  {DIM}Type 'help' for usage, 'quit' to exit{RESET}                  {DIM}│{RESET}
-{DIM}│{RESET}                                                          {DIM}│{RESET}
-{DIM}└──────────────────────────────────────────────────────────┘{RESET}
+{BOLD}{CYAN}  ████████╗██████╗  █████╗  ██████╗███████╗██████╗  █████╗  ██████╗██╗  ██╗
+  ╚══██╔══╝██╔══██╗██╔══██╗██╔════╝██╔════╝██╔══██╗██╔══██╗██╔════╝██║ ██╔╝
+     ██║   ██████╔╝███████║██║     █████╗  ██████╔╝███████║██║     █████╔╝
+     ██║   ██╔══██╗██╔══██║██║     ██╔══╝  ██╔══██╗██╔══██║██║     ██╔═██╗
+     ██║   ██║  ██║██║  ██║╚██████╗███████╗██████╔╝██║  ██║╚██████╗██║  ██╗
+     ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚══════╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝{RESET}
+
+  {DIM}Local AI-powered OSINT reconnaissance tool{RESET}
+  {DIM}Type 'help' for usage, 'quit' to exit{RESET}
+
+  {YELLOW}Disclaimer: This tool uses a local AI model to interpret search results.
+  Some information may be inaccurate or outdated. Always verify findings
+  with your own research before drawing conclusions.{RESET}
 """
 
 HELP_TEXT = f"""
 {BOLD}Commands:{RESET}
   {CYAN}help{RESET}              Show this message
+  {CYAN}export / report{RESET}   Save findings to a text file
   {CYAN}quit / exit{RESET}       Exit the tool
 
 {BOLD}Examples:{RESET}
   {GREEN}find accounts for username johndoe{RESET}
   {GREEN}check what services use this email test@example.com{RESET}
   {GREEN}whois example.com{RESET}
+  {GREEN}who is John Smith{RESET}
+  {GREEN}look up +1-555-123-4567{RESET}
+  {GREEN}search the web for johndoe security researcher{RESET}
 
 {BOLD}Follow-up:{RESET}
   {DIM}After a lookup, ask questions about the results:{RESET}
   {GREEN}which of those are social media?{RESET}
   {GREEN}categorize the results{RESET}
+  {GREEN}export{RESET}
 """
+
+
+def run_lookup(intent: dict, session, user_input: str):
+    """Run primary tool + any supplementary web searches, then summarize."""
+    value = intent["value"]
+
+    escalation = session.check_escalation(value)
+    if escalation:
+        print(f"\n{blocked(escalation)}\n")
+        return
+
+    print(f"\n{status(intent['type'])} {BOLD}{value}{RESET}")
+
+    hints = session.get_session_hints()
+    primary, enrichment = orchestrate(intent, session_hints=hints)
+
+    if "error" in primary:
+        print(f"{error(primary['error'])}")
+        return
+
+    session.add_tool_result(intent["type"], value, primary)
+
+    for enrich in enrichment:
+        if enrich.get("results"):
+            session.add_tool_result("web_search", value, enrich)
+
+    _thinking("Generating response...")
+
+    conversation = session.get_conversation_context()
+    knowledge = session.get_full_knowledge()
+
+    response = summarize(
+        primary,
+        user_input=user_input,
+        conversation=conversation,
+        full_knowledge=knowledge,
+        web_enrichment=enrichment,
+    )
+    _clear()
+    session.add_assistant_message(response)
+    print(f"\n{response}\n")
+
+
+def handle_person_lookup(name: str, user_input: str, session):
+    """Search for a real person by name, then start interactive investigation."""
+    escalation = session.check_escalation(name)
+    if escalation:
+        print(f"\n{blocked(escalation)}\n")
+        return
+
+    print(f"\n{status('person lookup')} {BOLD}{name}{RESET}")
+
+    hints = session.get_session_hints()
+    primary, _ = orchestrate({"type": "person_lookup", "value": name}, session_hints=hints)
+
+    result_data = primary if "error" not in primary else {"tool": "person", "query": name, "results": []}
+    session.add_tool_result("person_lookup", name, result_data)
+    session.start_investigation(name, {"web": result_data})
+
+    _thinking("Analyzing results...")
+
+    conversation = session.get_conversation_context()
+    response = investigate(result_data, name, user_input=user_input, conversation=conversation)
+    _clear()
+    session.add_assistant_message(response)
+    print(f"\n{response}\n")
+
+
+def handle_investigation_reply(user_input: str, session, resolved: str):
+    """Handle user's reply during an ongoing investigation.
+
+    Most replies get routed through the normal LLM intent parser now.
+    This just handles number picks and context refinement.
+    """
+    investigation = session.get_investigation()
+    name = investigation["name"]
+
+    # number pick: "1", "they are number 2", "the first one"
+    pick = parse_number_pick(user_input)
+    if pick is not None:
+        picked = session.pick_result(pick)
+        if not picked:
+            print(f"\n{warn(f'No result #{pick}. Pick a number from the list above.')}\n")
+            return
+
+        # build a focused web search from the picked result
+        from urllib.parse import urlparse
+        url = picked.get("url", "")
+        domain = urlparse(url).netloc if url else ""
+        query = f"{name} site:{domain}" if domain else f'"{name}" {picked.get("title", "")}'
+        run_lookup({"type": "web_search", "value": query}, session, user_input)
+        return
+
+    # everything else: let the LLM figure out the intent
+    _thinking("Processing...")
+    intent = parse(resolved)
+    _clear()
+
+    # lookups get run directly
+    if intent["type"] not in ("chat", "clarify"):
+        run_lookup(intent, session, user_input)
+        session.add_investigation_results(intent)
+        return
+
+    # conversational follow-up about the investigation
+    _thinking("Thinking...")
+    conversation = session.get_conversation_context()
+    response = chat(user_input, conversation)
+    _clear()
+    session.add_assistant_message(response)
+    print(f"\n{response}\n")
 
 
 def main():
     print(BANNER)
 
-    # Auto-setup: install Ollama, start server, pull model
+    model_config = get_model_config()
+    config.apply_model_config(model_config)
+    install_packages()
+
     print(status("Checking Ollama setup..."))
     llm.ensure_ready()
-
-    # Auto fine-tune: train + import on first run, skip if already done
-    finetuned = auto_finetune()
-    if finetuned:
-        config.OLLAMA_MODEL = finetuned
-        print(success(f"Using fine-tuned model: {finetuned}"))
-    else:
-        print(status(f"Using base model: {config.OLLAMA_MODEL}"))
-
     print(success("Ready.") + "\n")
 
     safety = SafetyFilter()
@@ -75,6 +256,14 @@ def main():
         if not user_input:
             continue
 
+        if user_input.lower() in ("export", "report", "save report", "generate report"):
+            if not session.has_lookups():
+                print(f"\n{warn('Nothing to export yet. Run some lookups first.')}\n")
+            else:
+                filepath = generate_report(session)
+                print(f"\n{success(f'Report saved to {filepath}')}\n")
+            continue
+
         if user_input.lower() in ("quit", "exit"):
             print(f"{DIM}Bye.{RESET}")
             break
@@ -83,54 +272,55 @@ def main():
             print(HELP_TEXT)
             continue
 
-        # Safety filter runs first — no exceptions
         decline = safety.check(user_input)
         if decline:
             print(f"\n{blocked(decline)}\n")
             continue
 
+        session.add_user_message(user_input)
+
         try:
-            # Parse natural language into structured intent
-            intent = parse(user_input)
+            resolved = _resolve_pronouns(user_input, session)
 
-            if intent["type"] == "unknown":
-                # If we have session history, treat as a follow-up question
-                all_context = session.get_all_context()
-                if all_context:
-                    print()
-                    answer = followup(user_input, all_context)
-                    print(f"{answer}\n")
-                else:
-                    print(f"\n{warn('Could not parse that request.')}")
-                    print(f"  {DIM}Try something like: 'find accounts for username johndoe'{RESET}\n")
+            # mid-investigation: number picks and follow-ups
+            if session.investigating:
+                handle_investigation_reply(user_input, session, resolved)
                 continue
 
-            value = intent["value"]
-
-            # Check session escalation on this target
-            escalation = session.check_escalation(value)
-            if escalation:
-                print(f"\n{blocked(escalation)}\n")
-                continue
-
-            print(f"\n{status(intent['type'])} {BOLD}{value}{RESET}")
-            print(working())
-
-            result = dispatch(intent)
-
-            if "error" in result:
-                print(f"{error(result['error'])}\n")
+            # fast path: obvious emails, domains, @mentions
+            fast_intent = _extract_target(resolved)
+            if fast_intent:
+                intent = fast_intent
             else:
-                # Record in session memory
-                session.record(intent["type"], value, result)
+                _thinking("Processing...")
+                intent = parse(resolved)
+                _clear()
 
-                # Get prior context for richer summaries
-                context = session.get_context_summary(value)
-                summary = summarize(result, prior_context=context, user_input=user_input)
-                print(f"\n{summary}\n")
+            # conversational responses
+            if intent["type"] in ("chat", "clarify"):
+                if intent.get("message", "").strip():
+                    answer = intent["message"]
+                else:
+                    _thinking("Thinking...")
+                    conversation = session.get_conversation_context()
+                    answer = chat(user_input, conversation)
+                    _clear()
+                session.add_assistant_message(answer)
+                print(f"\n{answer}\n")
+                continue
+
+            # person lookup starts an investigation
+            if intent["type"] == "person_lookup":
+                handle_person_lookup(intent["value"], user_input, session)
+                continue
+
+            # everything else goes through run_lookup
+            run_lookup(intent, session, user_input)
 
         except (ConnectionError, RuntimeError) as e:
             print(f"{error(str(e))}\n")
+
+    llm.stop_server()
 
 
 if __name__ == "__main__":

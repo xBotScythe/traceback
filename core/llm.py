@@ -10,6 +10,9 @@ import urllib.error
 
 import config
 
+_we_started_server = False
+_server_process = None
+
 
 def _ollama_bin() -> str | None:
     """Return path to ollama binary, or None."""
@@ -43,20 +46,47 @@ def _install_ollama():
 
 def _start_server():
     """Start Ollama server in the background."""
+    global _we_started_server, _server_process
     print("[setup] Starting Ollama server...")
-    subprocess.Popen(
+    _server_process = subprocess.Popen(
         ["ollama", "serve"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    # Wait for server to come up
+    # give it a sec to boot
     for _ in range(15):
         if _is_server_running():
+            _we_started_server = True
             print("[setup] Ollama server ready.")
             return
         time.sleep(1)
     print("[error] Ollama server failed to start.")
     sys.exit(1)
+
+
+def stop_server():
+    """Stop the Ollama server."""
+    global _server_process
+
+    # if we spawned the process, terminate it directly
+    if _server_process is not None:
+        _server_process.terminate()
+        try:
+            _server_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _server_process.kill()
+        _server_process = None
+
+    # also shut down any running ollama serve process
+    try:
+        subprocess.run(
+            ["pkill", "-f", "ollama serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
 
 
 def _model_available() -> bool:
@@ -66,7 +96,7 @@ def _model_available() -> bool:
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
             names = [m["name"] for m in data.get("models", [])]
-            # Match with or without :latest tag
+            # ollama sometimes appends :latest
             return any(
                 n == config.OLLAMA_MODEL or n == f"{config.OLLAMA_MODEL}:latest"
                 or config.OLLAMA_MODEL in n
@@ -120,8 +150,26 @@ def ask(prompt: str, system: str = "") -> str:
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             result = json.loads(resp.read())
-            return result.get("response", "").strip()
+            text = result.get("response", "").strip()
+            return _strip_markdown(text)
     except urllib.error.URLError as e:
         raise ConnectionError(f"Ollama not reachable: {e}") from e
     except json.JSONDecodeError:
         raise RuntimeError("Ollama returned invalid JSON")
+
+
+def _strip_markdown(text: str) -> str:
+    """Remove markdown formatting that local models love to add despite being told not to."""
+    import re
+    # convert markdown links [text](url) to just the url
+    text = re.sub(r'\[([^\]]*)\]\((https?://[^)]+)\)', r'\2', text)
+    # remove bold **text** and __text__
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    # remove italic *text* and _text_ (but not dashes like - item)
+    text = re.sub(r'(?<!\w)\*([^*\n]+?)\*(?!\w)', r'\1', text)
+    # remove headers ## Header
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # convert * bullets to dashes
+    text = re.sub(r'^(\s*)\* ', r'\1- ', text, flags=re.MULTILINE)
+    return text
