@@ -157,7 +157,10 @@ def _relevance_filter(results: list, query: str, user_input: str,
               "site", "com", "www", "https", "http", "html",
               "linkedin", "github", "twitter", "reddit", "facebook",
               "instagram", "tiktok", "youtube", "pinterest", "medium",
-              "articles", "career", "staff", "bio", "profile", "website"}
+              "articles", "career", "staff", "bio", "profile", "website",
+              "online", "post", "posts", "account", "accounts", "page",
+              "user", "username", "does", "what", "who", "where", "how",
+              "participate", "activity", "content", "social", "media"}
 
     def _extract_terms(text):
         terms = set()
@@ -188,6 +191,13 @@ def _relevance_filter(results: list, query: str, user_input: str,
         name_hits = sum(1 for t in name_terms if t in text)
         context_hits = sum(1 for t in context_terms if t in text)
         score = name_hits + (context_hits * 3)
+
+        # for single-word subjects (usernames), check the URL directly —
+        # if the URL contains a similar-but-different handle, drop it
+        if isinstance(r, dict) and len(name_terms) == 1 and " " not in subject:
+            url = r.get("url", "").lower()
+            if subject.lower() not in url and name_hits == 0:
+                continue
 
         # partial name match = likely a different person
         if name_terms and name_hits < len(name_terms):

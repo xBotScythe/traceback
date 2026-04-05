@@ -74,16 +74,21 @@ def lookup(query: str, person_mode: bool = False) -> dict:
     errors = []
     subject = _extract_subject(query)
 
-    # phase 1: broad search with the full query as-is
-    sys.stdout.write(f"\r  [...] Searching: {query[:50]}   ")
+    # phase 1: broad search
+    # if subject is a single token (username/handle), quote it so search
+    # engines don't split it or match partial substrings like xbot*
+    is_username = " " not in subject and subject.replace("_", "").replace("-", "").isalnum()
+    broad_query = f'"{subject}" {query.replace(subject, "").strip()}'.strip() if is_username else query
+
+    sys.stdout.write(f"\r  [...] Searching: {broad_query[:50]}   ")
     sys.stdout.flush()
-    broad = _search(DDGS, query, seen_urls, errors, max_results=10)
+    broad = _search(DDGS, broad_query, seen_urls, errors, max_results=10)
     for r in broad:
         url_hit_count[r.get("url", "")] = url_hit_count.get(r.get("url", ""), 0) + 1
     results.extend(broad)
 
-    # also try quoted subject
-    if subject != query:
+    # also try quoted subject if it differs from what we already searched
+    if subject != broad_query.strip('"'):
         quoted = _search(DDGS, f'"{subject}"', seen_urls, errors, max_results=10)
         for r in quoted:
             url_hit_count[r.get("url", "")] = url_hit_count.get(r.get("url", ""), 0) + 1
