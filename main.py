@@ -31,10 +31,10 @@ def _clear():
 
 
 def _resolve_pronouns(text: str, session) -> str:
-    """Replace 'their', 'them', 'they' with the last looked-up target.
+    """Replace the first pronoun reference with the last target.
 
-    Turns 'look into their reddit' into 'look into johndoe reddit'
-    so the intent parser and web search can work with it.
+    Only replaces once to avoid garbling sentences where the user
+    is providing new info about the person.
     """
     import re
     if not session.last_target:
@@ -46,9 +46,8 @@ def _resolve_pronouns(text: str, session) -> str:
         return text
 
     target = session.last_target
-    # replace pronouns with the actual target name
     resolved = re.sub(r"\b(their|them|they|his|her|this user|that user)('s)?\b",
-                      target, text, flags=re.IGNORECASE)
+                      target, text, count=1, flags=re.IGNORECASE)
     return resolved
 
 
@@ -237,7 +236,7 @@ def handle_investigation_reply(user_input: str, session, resolved: str):
 
     # everything else: let the LLM figure out the intent
     _thinking("Processing...")
-    intent = parse(resolved)
+    intent = parse(resolved, session_context=session.get_intent_context())
     _clear()
 
     # lookups get run directly
@@ -316,7 +315,7 @@ def main():
                 intent = fast_intent
             else:
                 _thinking("Processing...")
-                intent = parse(resolved)
+                intent = parse(resolved, session_context=session.get_intent_context())
                 _clear()
 
             # conversational responses

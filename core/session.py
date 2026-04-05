@@ -112,6 +112,17 @@ class Session:
         types = [e["type"] for e in entries]
         return f"Prior lookups on this target: {', '.join(types)}."
 
+    def get_intent_context(self) -> str:
+        """Short context string for the intent parser so it can build
+        better search queries using known names/aliases."""
+        if not self._last_target:
+            return ""
+        parts = [f"Target: {self._last_target}"]
+        hints = self.get_session_hints()
+        if len(hints) > 1:
+            parts.append(f"Also known: {', '.join(hints[1:5])}")
+        return ". ".join(parts)
+
     def get_full_knowledge(self) -> str:
         """Build a summary of everything we've found across all targets."""
         if not self._lookups:

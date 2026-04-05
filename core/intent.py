@@ -14,6 +14,7 @@ Types: username_lookup, email_lookup, domain_lookup, person_lookup, phone_lookup
 
 Rules:
 - Any investigation/lookup request -> web_search with a short search query as value
+- Use "Known info" to build better queries. If the user asks about a real person, use their real name in the query, not just their username.
 - Follow-up about previous results -> chat, empty message
 - Vague request -> clarify with a message asking what they want
 - Greeting or off-topic -> chat with a short response
@@ -47,9 +48,12 @@ User: look into this for me
 {"type": "clarify", "value": "", "message": "Look into what? Give me a username, email, domain, phone number, or name."}"""
 
 
-def parse(user_input: str) -> dict:
+def parse(user_input: str, session_context: str = "") -> dict:
     """Parse user input into a structured intent dict."""
-    prompt = f"{EXAMPLES}\n\nUser: {user_input}"
+    prompt = f"{EXAMPLES}\n\n"
+    if session_context:
+        prompt += f"Known info: {session_context}\n"
+    prompt += f"User: {user_input}"
 
     try:
         raw = llm.ask(prompt, system=SYSTEM_PROMPT)
