@@ -137,107 +137,90 @@ def _simplify_dict_results(data: dict) -> str:
 
 def _relevance_filter(results: list, query: str, user_input: str,
                       full_knowledge: str) -> list:
-    """Score and filter results so the LLM only sees relevant ones.
+    """Filter results to only those that actually mention the subject.
 
-    Splits terms into "name" (the person's name) and "context" (everything
-    else like job title, school, company). Results that match the name but
-    zero context terms are likely a different person with the same name
-    and get dropped.
+    Simple approach: the subject (name or username) must appear in the
+    result text or URL. Context terms from session knowledge boost score
+    but aren't required.
     """
     if not results or not isinstance(results, list):
         return results
 
     from tools.websearch import _extract_subject
 
+    subject = _extract_subject(query).lower()
+    subject_parts = subject.split()
+    is_username = len(subject_parts) == 1
+
+    # pull useful context from prior findings
     filler = {"the", "and", "for", "that", "this", "with", "from", "about",
               "what", "their", "they", "them", "some", "have", "has", "been",
               "are", "was", "were", "will", "can", "not", "but", "also",
               "more", "into", "give", "using", "check", "look", "find",
-              "info", "information", "well", "little", "bit",
+              "info", "information", "online", "post", "posts", "account",
+              "user", "username", "does", "who", "where", "how",
+              "participate", "activity", "content", "social", "media",
               "site", "com", "www", "https", "http", "html",
               "linkedin", "github", "twitter", "reddit", "facebook",
               "instagram", "tiktok", "youtube", "pinterest", "medium",
-              "articles", "career", "staff", "bio", "profile", "website",
-              "online", "post", "posts", "account", "accounts", "page",
-              "user", "username", "does", "what", "who", "where", "how",
-              "participate", "activity", "content", "social", "media"}
+              "articles", "career", "staff", "bio", "profile", "website"}
 
-    def _extract_terms(text):
+    def _get_context_terms():
         terms = set()
-        for word in text.lower().split():
+        for word in f"{query} {user_input} {full_knowledge}".lower().split():
             clean = word.strip(".,;:()[]\"'/")
-            if len(clean) >= 3 and clean not in filler:
+            if len(clean) >= 3 and clean not in filler and clean not in subject_parts:
                 terms.add(clean)
         return terms
 
-    # separate name terms from context terms
-    subject = _extract_subject(query)
-    name_terms = _extract_terms(subject)
-    all_terms = _extract_terms(f"{query} {user_input} {full_knowledge}")
-    context_terms = all_terms - name_terms
-
-    if not all_terms:
-        return results
+    context_terms = _get_context_terms()
 
     scored = []
     for r in results:
-        if isinstance(r, str):
-            text = r.lower()
-        elif isinstance(r, dict):
+        if isinstance(r, dict):
             text = " ".join(str(v) for v in r.values()).lower()
+            url = r.get("url", "").lower()
+        elif isinstance(r, str):
+            text = r.lower()
+            url = ""
         else:
             text = str(r).lower()
+            url = ""
 
-        name_hits = sum(1 for t in name_terms if t in text)
+        # primary check: does the subject appear in the result?
+        if is_username:
+            # exact match only for usernames
+            has_subject = subject in text or subject in url
+        else:
+            # for multi-word names, all parts must appear
+            has_subject = all(part in text for part in subject_parts)
+
+        if not has_subject:
+            continue
+
+        # score by context matches
         context_hits = sum(1 for t in context_terms if t in text)
-        score = name_hits + (context_hits * 3)
-
-        # for single-word subjects (usernames), check the URL directly —
-        # if the URL contains a similar-but-different handle, drop it
-        if isinstance(r, dict) and len(name_terms) == 1 and " " not in subject:
-            url = r.get("url", "").lower()
-            if subject.lower() not in url and name_hits == 0:
-                continue
-
-        # partial name match = likely a different person
-        if name_terms and name_hits < len(name_terms):
-            score = max(0, context_hits)
-
-        # name match but zero context = almost certainly a different person
-        if name_hits > 0 and context_hits == 0 and len(context_terms) >= 2:
-            continue
-
-        # no name match and no context match = completely irrelevant
-        if name_hits == 0 and context_hits == 0:
-            continue
+        score = 1 + (context_hits * 2)
 
         scored.append((score, r))
 
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    # tag results with confidence for the LLM
-    max_score = scored[0][0] if scored else 1
-    for score, r in scored:
-        if isinstance(r, dict):
-            if max_score > 0:
-                ratio = score / max_score
-                if ratio >= 0.6:
-                    r["_confidence"] = "high"
-                elif ratio >= 0.3:
-                    r["_confidence"] = "medium"
-                else:
-                    r["_confidence"] = "low"
-            else:
-                r["_confidence"] = "low"
+    # tag with confidence
+    if scored:
+        max_score = scored[0][0]
+        for score, r in scored:
+            if isinstance(r, dict):
+                ratio = score / max_score if max_score > 0 else 0
+                r["_confidence"] = "high" if ratio >= 0.5 else "medium"
 
-    # drop low confidence results entirely — don't let the LLM see them
-    relevant = [r for score, r in scored if score > 0]
-    relevant = [r for r in relevant
-                if not isinstance(r, dict) or r.get("_confidence") != "low"]
+    relevant = [r for _, r in scored]
+
+    # if nothing matched, fall back to top raw results
     if not relevant:
-        relevant = [r for _, r in scored[:10]]
+        relevant = results[:10]
 
-    # dedup LinkedIn profiles: multiple /in/ URLs = different people, keep best only
+    # dedup linkedin profiles
     best_linkedin = None
     deduped = []
     for r in relevant:
@@ -246,7 +229,6 @@ def _relevance_filter(results: list, query: str, user_input: str,
             if best_linkedin is None:
                 best_linkedin = r
                 deduped.append(r)
-            # skip other linkedin profile URLs (they're different people)
         else:
             deduped.append(r)
 
