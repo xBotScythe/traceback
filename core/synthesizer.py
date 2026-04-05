@@ -26,29 +26,40 @@ def _trim(text: str, limit: int) -> str:
     return text[:limit] + "\n  ... (trimmed)"
 
 
-SUMMARY_SYSTEM = """You are Traceback, an OSINT tool in a plain text terminal. Talk directly to the person.
+_BASE_RULES = "No markdown. Raw URLs only. Be brief. Only state facts from results."
 
-Rules:
-- SKIP results about the wrong person. Do not mention them.
-- If info conflicts (e.g. high school vs college), use the most recent.
-- Use prior findings to filter. Only state facts from results.
-- Be brief. Answer what was asked, nothing more.
-- No markdown. No [text](url) links. Raw URLs only.
-- End with "Sources:" listing URLs you used.
-- Use [1] [2] [3] for next steps."""
+TOOL_PROMPTS = {
+    "sherlock": f"""Traceback, an OSINT tool. Summarize which platforms this username was found on.
+Group by category (social media, dev, gaming, etc). {_BASE_RULES}
+End with Sources: listing profile URLs.""",
 
-CHAT_SYSTEM = """You are Traceback, an OSINT tool in a terminal. Be brief.
-- Only reference what you've actually found. Do not invent results.
-- No markdown. Plain text only."""
+    "email": f"""Traceback, an OSINT tool. Summarize what services this email is registered on and any breaches found.
+{_BASE_RULES} End with Sources: listing relevant URLs.""",
 
-INVESTIGATE_SYSTEM = """You are Traceback, investigating a person in a terminal.
+    "domain": f"""Traceback, an OSINT tool. Summarize the domain info: registrar, owner, DNS, tech stack, security posture.
+{_BASE_RULES}""",
 
-Rules:
-- SKIP results about the wrong person entirely.
-- Only state facts from the results.
-- Be brief. No markdown. Paste raw URLs.
-- End with "Sources:" listing URLs you used.
-- Use [1] [2] [3] for next steps."""
+    "phone": f"""Traceback, an OSINT tool. Summarize the phone number: carrier, type, location, and any web mentions.
+{_BASE_RULES} End with Sources: listing relevant URLs.""",
+
+    "web_search": f"""Traceback, an OSINT tool. Summarize what these search results reveal about the subject.
+Skip results about the wrong person. Use prior findings to filter.
+{_BASE_RULES} End with Sources: listing URLs you used.""",
+
+    "person": f"""Traceback, an OSINT tool. Summarize what these results reveal about this person.
+Skip results about a different person with the same name.
+{_BASE_RULES} End with Sources: listing URLs you used. Use [1] [2] [3] for next steps.""",
+}
+
+SUMMARY_FALLBACK = f"""Traceback, an OSINT tool. Summarize the results.
+Skip wrong-person results. {_BASE_RULES} End with Sources: listing URLs."""
+
+CHAT_SYSTEM = """Traceback, an OSINT tool in a terminal. Be brief.
+Only reference what you've actually found. No markdown. Plain text only."""
+
+INVESTIGATE_SYSTEM = f"""Traceback, investigating a person in a terminal.
+Skip results about the wrong person. {_BASE_RULES}
+End with Sources: listing URLs. Use [1] [2] [3] for next steps."""
 
 
 
@@ -234,8 +245,10 @@ def format(tool_output: dict, user_input: str = "",
     if conversation:
         prompt += f"\n\nConversation:\n{_trim(conversation, _budget('conversation'))}"
 
+    system = TOOL_PROMPTS.get(tool_name, SUMMARY_FALLBACK)
+
     try:
-        return llm.ask(prompt, system=SUMMARY_SYSTEM)
+        return llm.ask(prompt, system=system)
     except (ConnectionError, RuntimeError):
         return _fallback_format(tool_output)
 
