@@ -216,9 +216,10 @@ def _relevance_filter(results: list, query: str, user_input: str,
 
     relevant = [r for _, r in scored]
 
-    # if nothing matched, fall back to top raw results
+    # if nothing passed the filter, return empty — better than
+    # giving the LLM random garbage to hallucinate from
     if not relevant:
-        relevant = results[:10]
+        return []
 
     # dedup linkedin profiles
     best_linkedin = None
