@@ -44,8 +44,9 @@ def _extract_subject(query: str) -> str:
         "writer", "author", "developer", "engineer", "designer",
         "programmer", "researcher", "journalist", "editor", "reporter",
         "magazine", "newspaper", "publication", "blog", "forum",
-        "account", "profile", "activity",
+        "account", "profile", "activity", "online", "offline",
         "posts", "history", "info", "information", "about",
+        "what", "where", "who", "how", "does", "their", "they",
     }
     words = query.split()
     # take the leading words that aren't context
