@@ -189,7 +189,7 @@ def _relevance_filter(results: list, query: str, user_input: str,
         context_hits = sum(1 for t in context_terms if t in text)
         score = name_hits + (context_hits * 3)
 
-        # partial name match (e.g. "noah galloway" matching "noah") = wrong person
+        # partial name match = likely a different person
         if name_terms and name_hits < len(name_terms):
             score = max(0, context_hits)
 
