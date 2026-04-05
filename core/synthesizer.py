@@ -26,7 +26,7 @@ def _trim(text: str, limit: int) -> str:
     return text[:limit] + "\n  ... (trimmed)"
 
 
-_BASE_RULES = "No markdown. Raw URLs only. Be brief. Only state facts from results."
+_BASE_RULES = "Answer what was asked — do not repeat prior findings. No markdown. Raw URLs only. Be brief. Only state NEW facts from these results."
 
 TOOL_PROMPTS = {
     "sherlock": f"""Traceback, an OSINT tool. Summarize which platforms this username was found on.
@@ -189,9 +189,16 @@ def _relevance_filter(results: list, query: str, user_input: str,
         context_hits = sum(1 for t in context_terms if t in text)
         score = name_hits + (context_hits * 3)
 
+        # partial name match (e.g. "noah galloway" matching "noah") = wrong person
+        if name_terms and name_hits < len(name_terms):
+            score = max(0, context_hits)
+
         # name match but zero context = almost certainly a different person
-        # drop entirely when we have context to disambiguate with
         if name_hits > 0 and context_hits == 0 and len(context_terms) >= 2:
+            continue
+
+        # no name match and no context match = completely irrelevant
+        if name_hits == 0 and context_hits == 0:
             continue
 
         scored.append((score, r))

@@ -84,6 +84,14 @@ def _extract_target(text: str) -> dict | None:
     if m:
         return {"type": "username_lookup", "value": m.group(1)}
 
+    # "X is a username" / "username X" / "their X account" / "the username X"
+    m = re.search(r'(\w{3,30})\s+is\s+(?:a\s+)?(?:user\s*name|alias|handle)', lower)
+    if m:
+        return {"type": "username_lookup", "value": m.group(1)}
+    m = re.search(r'(?:user\s*name|alias|handle)\s+(?:is\s+)?(\w{3,30})', lower)
+    if m:
+        return {"type": "username_lookup", "value": m.group(1)}
+
     # @username
     m = re.search(r'@(\w{3,30})\b', text)
     if m:

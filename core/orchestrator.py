@@ -154,11 +154,16 @@ def _disambiguate_query(query: str, hints: list) -> str:
     search engines disambiguate common names from prior context."""
     if not hints:
         return query
-    # don't re-add terms that are already in the query
     lower_q = query.lower()
+    # split query into individual words for substring checking
+    query_words = set(lower_q.split())
     extra = []
     for hint in hints:
-        if hint.lower() not in lower_q and len(hint) >= 3:
+        h_lower = hint.lower()
+        # skip if hint is already in query as a word or substring
+        if h_lower in query_words or h_lower in lower_q:
+            continue
+        if len(hint) >= 3:
             extra.append(hint)
         if len(extra) >= 2:
             break
