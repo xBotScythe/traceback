@@ -43,9 +43,8 @@ End with Sources: listing profile URLs.""",
 {_BASE_RULES} End with Sources: listing relevant URLs.""",
 
     "web_search": f"""Traceback, an OSINT tool. Summarize what these search results reveal about the subject.
-IMPORTANT: Results marked [low] are likely about a DIFFERENT person — do NOT include them.
-If a result's job title, location, or employer contradicts prior findings, it's a different person. Skip it entirely.
-Use prior findings to confirm identity before including new info.
+If results don't answer the question, say so. Do NOT guess or fill in gaps with unrelated results.
+If a result contradicts prior findings, skip it — it's about a different person.
 {_BASE_RULES} End with Sources: listing URLs you used.""",
 
     "person": f"""Traceback, an OSINT tool. Summarize what these results reveal about this person.
@@ -67,14 +66,12 @@ If a result contradicts known facts (wrong job, wrong location), skip it entirel
 
 
 
-def _simplify_results(results: list, limit: int = 20) -> str:
-    """Turn a list of result dicts into compact data for the LLM to interpret.
-
-    Gives the LLM enough to summarize from, but keeps it compact so it doesn't
-    just regurgitate raw text.
-    """
+def _simplify_results(results: list, limit: int = 20, subject: str = "") -> str:
+    """Turn a list of result dicts into compact data for the LLM."""
     if not results:
         return "(no results)"
+
+    subject_lower = subject.lower() if subject else ""
 
     lines = []
     for i, item in enumerate(results[:limit], 1):
@@ -91,7 +88,12 @@ def _simplify_results(results: list, limit: int = 20) -> str:
                 conf = item.get("_confidence", "")
                 tag = f" [{conf}]" if conf else ""
                 line = f"  {i}.{tag} {title} | {url}"
-                if snippet:
+                # only include snippet if it mentions the subject —
+                # search engine snippets often contain text about
+                # other users/accounts on the same page
+                if snippet and subject_lower and subject_lower in snippet.lower():
+                    line += f" | {snippet[:150].strip()}"
+                elif snippet and not subject_lower:
                     line += f" | {snippet[:150].strip()}"
                 lines.append(line)
             elif service:
@@ -189,8 +191,9 @@ def _relevance_filter(results: list, query: str, user_input: str,
 
         # primary check: does the subject appear in the result?
         if is_username:
-            # exact match only for usernames
-            has_subject = subject in text or subject in url
+            # for usernames, require it in the URL path or title —
+            # snippets often mention the username in passing on unrelated pages
+            has_subject = subject in url or subject in (r.get("title", "") if isinstance(r, dict) else "").lower()
         else:
             # for multi-word names, all parts must appear
             has_subject = all(part in text for part in subject_parts)
@@ -243,10 +246,13 @@ def format(tool_output: dict, user_input: str = "",
     tool_name = tool_output.get("tool", "unknown")
     query = tool_output.get("query", "")
 
+    from tools.websearch import _extract_subject
+    subject = _extract_subject(query)
+
     # filter out irrelevant results before the LLM sees them
     if isinstance(results, list):
         results = _relevance_filter(results, query, user_input, full_knowledge)
-        data_text = _simplify_results(results)
+        data_text = _simplify_results(results, subject=subject)
     elif isinstance(results, dict):
         data_text = _simplify_dict_results(results)
     else:
@@ -260,7 +266,7 @@ def format(tool_output: dict, user_input: str = "",
         for enrichment in web_enrichment:
             enrich_results = enrichment.get("results", [])
             if enrich_results:
-                prompt += f"\n\n{_trim(_simplify_results(enrich_results, limit=10), _budget('results') // 2)}"
+                prompt += f"\n\n{_trim(_simplify_results(enrich_results, limit=10, subject=subject), _budget('results') // 2)}"
 
     if full_knowledge:
         prompt += f"\n\nPrior findings:\n{_trim(full_knowledge, _budget('knowledge'))}"
@@ -280,7 +286,7 @@ def investigate(results: dict, name: str, user_input: str = "",
     """Present person search results as numbered picks."""
     result_list = results.get("results", [])
     result_list = _relevance_filter(result_list, name, user_input, conversation)
-    data_text = _simplify_results(result_list, limit=15)
+    data_text = _simplify_results(result_list, limit=15, subject=name)
     data_text = _trim(data_text, _budget("results"))
 
     prompt = f"Target: {name}"

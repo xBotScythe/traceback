@@ -150,31 +150,27 @@ def merge_results(executed: list[dict]) -> tuple[dict, list[dict]]:
 
 
 def _disambiguate_query(query: str, hints: list) -> str:
-    """Append a couple session hints to a web search query to help
-    search engines disambiguate common names from prior context."""
+    """Append a session hint to a short/vague web search query.
+    Only adds context when the query is short enough to need it —
+    longer queries already have enough context for the search engine."""
     if not hints:
         return query
+    # if the query already has 4+ words, it has enough context
+    if len(query.split()) >= 4:
+        return query
     lower_q = query.lower()
-    # split query into individual words for substring checking
     query_words = set(lower_q.split())
-    extra = []
     for hint in hints:
         h_lower = hint.lower()
-        # skip if hint is already in query as a word or substring
         if h_lower in query_words or h_lower in lower_q:
             continue
         if len(hint) >= 3:
-            extra.append(hint)
-        if len(extra) >= 2:
-            break
-    if extra:
-        return f"{query} {' '.join(extra)}"
+            return f"{query} {hint}"
     return query
 
 
 def run(intent: dict, session_hints: list = None, progress=True) -> tuple[dict, list[dict]]:
     """Plan, execute, and merge."""
-    # for web searches, inject session context into the query for disambiguation
     if intent["type"] == "web_search" and session_hints:
         intent = dict(intent)
         intent["value"] = _disambiguate_query(intent["value"], session_hints)
