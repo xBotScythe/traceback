@@ -26,7 +26,7 @@ def _trim(text: str, limit: int) -> str:
     return text[:limit] + "\n  ... (trimmed)"
 
 
-_BASE_RULES = "Answer what was asked — do not repeat prior findings. No markdown. Raw URLs only. Be brief. Only state NEW facts from these results."
+_BASE_RULES = "Use prior findings as context to interpret new results. No markdown. Raw URLs only. Be brief."
 
 TOOL_PROMPTS = {
     "sherlock": f"""Traceback, an OSINT tool. Summarize which platforms this username was found on.
@@ -260,18 +260,20 @@ def format(tool_output: dict, user_input: str = "",
 
     data_text = _trim(data_text, _budget("results"))
 
-    prompt = f"Question: {user_input}\n\nResults:\n{data_text}"
+    # prior findings go FIRST so the model has context for interpreting new results
+    prompt = f"Question: {user_input}\n"
+    if full_knowledge:
+        prompt += f"\nWhat we already know:\n{_trim(full_knowledge, _budget('knowledge'))}\n"
+    if conversation:
+        prompt += f"\nConversation:\n{_trim(conversation, _budget('conversation'))}\n"
+
+    prompt += f"\nNew results:\n{data_text}"
 
     if web_enrichment:
         for enrichment in web_enrichment:
             enrich_results = enrichment.get("results", [])
             if enrich_results:
                 prompt += f"\n\n{_trim(_simplify_results(enrich_results, limit=10, subject=subject), _budget('results') // 2)}"
-
-    if full_knowledge:
-        prompt += f"\n\nPrior findings:\n{_trim(full_knowledge, _budget('knowledge'))}"
-    if conversation:
-        prompt += f"\n\nConversation:\n{_trim(conversation, _budget('conversation'))}"
 
     system = TOOL_PROMPTS.get(tool_name, SUMMARY_FALLBACK)
 
