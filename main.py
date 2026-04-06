@@ -107,6 +107,23 @@ def _extract_target(text: str) -> dict | None:
     if m:
         return {"type": "web_search", "value": m.group(1).strip()}
 
+    # "tell me about X" / "what do you know about X" / "info on X" / "look into X"
+    # "check X" / "check out X" / "what can you find on X" -> web search
+    m = re.match(
+        r'(?:tell\s+me\s+about|what\s+(?:do\s+you\s+know|can\s+you\s+find)\s+(?:about|on)|'
+        r'(?:get\s+me\s+)?info(?:rmation)?\s+(?:on|about)|look\s+into|check\s+(?:out\s+)?|'
+        r'what\s+is|whats)\s+(.+)',
+        lower,
+    )
+    if m:
+        return {"type": "web_search", "value": m.group(1).strip()}
+
+    # "X on reddit/twitter/github/tiktok/etc" -> web search "X platform"
+    _platforms = r'(?:reddit|twitter|x\.com|github|tiktok|instagram|youtube|linkedin|facebook|twitch|discord|steam)'
+    m = re.search(rf'(\w{{3,30}})\s+on\s+({_platforms})', lower)
+    if m:
+        return {"type": "web_search", "value": f"{m.group(1)} {m.group(2)}"}
+
     return None
 
 

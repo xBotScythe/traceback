@@ -292,7 +292,7 @@ def format(tool_output: dict, user_input: str = "",
 
     try:
         return llm.ask(prompt, system=system, stream_to=stream_to,
-                       options={"num_predict": predict})
+                       options={"num_predict": predict, "num_ctx": 8192})
     except (ConnectionError, RuntimeError):
         return _fallback_format(tool_output)
 
@@ -315,7 +315,7 @@ def investigate(results: dict, name: str, user_input: str = "",
 
     try:
         return llm.ask(prompt, system=INVESTIGATE_SYSTEM, stream_to=stream_to,
-                       options={"num_predict": _NUM_PREDICT["investigate"]})
+                       options={"num_predict": _NUM_PREDICT["investigate"], "num_ctx": 8192})
     except (ConnectionError, RuntimeError):
         return _fallback_format(results)
 
@@ -325,7 +325,7 @@ def chat(user_input: str, conversation: str, stream_to=None) -> str:
     prompt = f"Conversation:\n{conv}\n\nUser: {user_input}"
     try:
         response = llm.ask(prompt, system=CHAT_SYSTEM, stream_to=stream_to,
-                           options={"num_predict": _NUM_PREDICT["chat"]})
+                           options={"num_predict": _NUM_PREDICT["chat"], "num_ctx": 4096})
         return response if response.strip() else "Not sure what to make of that. Try a username, email, or domain lookup."
     except (ConnectionError, RuntimeError):
         return "Something went wrong. Try again."
