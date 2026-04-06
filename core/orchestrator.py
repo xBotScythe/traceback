@@ -169,8 +169,28 @@ def _disambiguate_query(query: str, hints: list) -> str:
     return query
 
 
+def _has_relevant_results(primary: dict, query: str) -> bool:
+    """Quick check if results mention the search subject at all."""
+    from tools.websearch import _extract_subject
+    subject = _extract_subject(query).lower()
+    results = primary.get("results", [])
+    if not isinstance(results, list) or not results:
+        return False
+    for r in results[:10]:
+        text = ""
+        if isinstance(r, dict):
+            text = " ".join(str(v) for v in r.values()).lower()
+        elif isinstance(r, str):
+            text = r.lower()
+        if subject in text:
+            return True
+    return False
+
+
 def run(intent: dict, session_hints: list = None, progress=True) -> tuple[dict, list[dict]]:
     """Plan, execute, and merge."""
+    original_value = intent["value"]
+
     if intent["type"] == "web_search" and session_hints:
         intent = dict(intent)
         intent["value"] = _disambiguate_query(intent["value"], session_hints)
@@ -178,6 +198,24 @@ def run(intent: dict, session_hints: list = None, progress=True) -> tuple[dict, 
     jobs = plan(intent)
     executed = execute(jobs, session_hints=session_hints, progress=progress)
     primary, supplementary = merge_results(executed)
+
+    # second-chance: if web search returned nothing relevant, retry
+    # with just the quoted subject
+    if (intent["type"] == "web_search"
+            and primary
+            and not _has_relevant_results(primary, original_value)):
+        from tools.websearch import _extract_subject
+        subject = _extract_subject(original_value)
+        if subject != original_value:
+            if progress:
+                _progress(f"Retrying with simpler search...")
+            retry_intent = {"type": "web_search", "value": f'"{subject}"'}
+            retry_jobs = plan(retry_intent)
+            retry_executed = execute(retry_jobs, progress=False)
+            retry_primary, retry_supp = merge_results(retry_executed)
+            if retry_primary and _has_relevant_results(retry_primary, original_value):
+                primary = retry_primary
+                supplementary.extend(retry_supp)
 
     if progress:
         _clear_progress()
