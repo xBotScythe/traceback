@@ -106,12 +106,46 @@ def _model_available() -> bool:
         return False
 
 
+def _update_ollama():
+    """Re-run the install script to update Ollama."""
+    print("[setup] Updating Ollama...")
+    try:
+        subprocess.run(
+            ["bash", "-c", "curl -fsSL https://ollama.com/install.sh | sh"],
+            check=True,
+        )
+        print("[setup] Ollama updated.")
+    except subprocess.CalledProcessError:
+        print("[error] Failed to update Ollama.")
+        print("        Update manually: https://ollama.com/download")
+        sys.exit(1)
+
+
 def _pull_model():
-    """Pull the configured model."""
+    """Pull the configured model, updating Ollama if needed."""
     print(f"[setup] Pulling model '{config.OLLAMA_MODEL}' (this may take a few minutes)...")
     try:
-        subprocess.run(["ollama", "pull", config.OLLAMA_MODEL], check=True)
-        print(f"[setup] Model '{config.OLLAMA_MODEL}' ready.")
+        # let output flow through so the user sees download progress
+        result = subprocess.run(["ollama", "pull", config.OLLAMA_MODEL])
+
+        if result.returncode == 0:
+            print(f"[setup] Model '{config.OLLAMA_MODEL}' ready.")
+            return
+
+        # re-run with capture just to read the error message and decide what to do
+        check = subprocess.run(
+            ["ollama", "pull", config.OLLAMA_MODEL],
+            capture_output=True, text=True,
+        )
+        if "newer version" in (check.stderr or "").lower():
+            _update_ollama()
+            _start_server()
+            subprocess.run(["ollama", "pull", config.OLLAMA_MODEL], check=True)
+            print(f"[setup] Model '{config.OLLAMA_MODEL}' ready.")
+            return
+
+        print(f"[error] Failed to pull '{config.OLLAMA_MODEL}'. Try: ollama pull {config.OLLAMA_MODEL}")
+        sys.exit(1)
     except subprocess.CalledProcessError:
         print(f"[error] Failed to pull model '{config.OLLAMA_MODEL}'.")
         sys.exit(1)
@@ -156,7 +190,7 @@ def ask(prompt: str, system: str = "", format: str = "",
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=600) as resp:
             if stream_to is not None:
                 return _read_stream(resp, stream_to)
             result = json.loads(resp.read())

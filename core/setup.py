@@ -236,10 +236,12 @@ def detect_tier() -> str:
     ram = _get_ram_gb()
 
     # apple silicon shares RAM as VRAM
+    # gemma4:31b (dense ~20GB) needs 32GB+ to avoid swap on apple silicon
+    # gemma4:26b (MoE ~16GB active) runs well on 20GB+
     if gpu["type"] == "apple_silicon":
-        if ram >= 24:
+        if ram >= 32:
             return "high"
-        elif ram >= 16:
+        elif ram >= 20:
             return "mid"
         return "low"
 
