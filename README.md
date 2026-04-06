@@ -54,11 +54,11 @@ This is a one-time setup. Subsequent launches are instant.
 
 ### Model Tiers
 
-| Tier | Model | RAM | Notes |
-|------|-------|-----|-------|
-| Low | llama3.1:8b | 8GB+ | Baseline, works on most machines |
-| Mid | gemma3:12b | 16GB+ | Recommended for Apple Silicon / decent GPUs |
-| High | llama3.3:70b | 48GB+ | Best accuracy, needs serious hardware |
+| Tier | Model | Size | RAM | Notes |
+|------|-------|------|-----|-------|
+| Low | gemma4:e4b | ~10GB | 8GB+ | 128K context, native JSON output |
+| Mid | gemma4:26b (MoE) | ~18GB | 16GB+ | 256K context, fast despite size |
+| High | gemma4:31b (Dense) | ~20GB | 24GB+ | 256K context, best accuracy |
 
 ### Examples
 

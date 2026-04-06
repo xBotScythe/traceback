@@ -7,11 +7,11 @@ from core import llm
 
 
 # context budgets per tier (characters, not tokens - rough approximation)
-# keeps prompts from overwhelming smaller models
+# gemma 4 has much larger context windows so we can be more generous
 _CONTEXT_BUDGETS = {
-    "low": {"system": 1000, "results": 4000, "conversation": 2000, "knowledge": 2000},
-    "mid": {"system": 1500, "results": 6000, "conversation": 3000, "knowledge": 3000},
-    "high": {"system": 2000, "results": 8000, "conversation": 4000, "knowledge": 4000},
+    "low": {"system": 1500, "results": 6000, "conversation": 3000, "knowledge": 3000},
+    "mid": {"system": 2000, "results": 10000, "conversation": 5000, "knowledge": 5000},
+    "high": {"system": 2500, "results": 14000, "conversation": 6000, "knowledge": 6000},
 }
 
 

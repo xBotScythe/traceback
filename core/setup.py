@@ -11,22 +11,22 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".traceba
 
 TIERS = {
     "low": {
-        "model": "llama3.1:8b",
+        "model": "gemma4:e4b",
         "label": "Low",
-        "desc": "Baseline. Works on most machines with 8GB+ RAM.",
-        "options": {"temperature": 0.1, "num_ctx": 8192, "num_predict": 4096},
+        "desc": "Baseline. ~10GB download, 128K context. Works on 8GB+ RAM.",
+        "options": {"temperature": 0.1, "num_ctx": 16384, "num_predict": 4096},
     },
     "mid": {
-        "model": "gemma3:12b",
+        "model": "gemma4:26b",
         "label": "Mid",
-        "desc": "Recommended. Good accuracy on 16-24GB RAM or Apple Silicon.",
-        "options": {"temperature": 0.1, "num_ctx": 12288, "num_predict": 4096},
+        "desc": "Recommended. MoE ~18GB download, 256K context. 16GB+ RAM.",
+        "options": {"temperature": 0.1, "num_ctx": 32768, "num_predict": 4096},
     },
     "high": {
-        "model": "llama3.3:70b",
+        "model": "gemma4:31b",
         "label": "High",
-        "desc": "Best accuracy. Needs 48GB+ RAM or a GPU with 40GB+ VRAM.",
-        "options": {"temperature": 0.1, "num_ctx": 16384, "num_predict": 8192},
+        "desc": "Best accuracy. Dense 31B, ~20GB download, 256K context. 24GB+ RAM.",
+        "options": {"temperature": 0.1, "num_ctx": 65536, "num_predict": 8192},
     },
 }
 
@@ -228,13 +228,16 @@ def _get_gpu_info() -> dict:
 
 
 def detect_tier() -> str:
-    """Pick a tier based on GPU and RAM."""
+    """Pick a tier based on GPU and RAM.
+    Gemma 4 models are much smaller than the old llama lineup:
+      e4b ~10GB, 26b MoE ~18GB, 31b dense ~20GB
+    """
     gpu = _get_gpu_info()
     ram = _get_ram_gb()
 
     # apple silicon shares RAM as VRAM
     if gpu["type"] == "apple_silicon":
-        if ram >= 48:
+        if ram >= 24:
             return "high"
         elif ram >= 16:
             return "mid"
@@ -243,29 +246,23 @@ def detect_tier() -> str:
     # nvidia
     if gpu["type"] == "nvidia":
         vram = gpu["vram_gb"]
-        if vram >= 40:
+        if vram >= 24:
             return "high"
-        elif vram >= 8:
+        elif vram >= 12:
             return "mid"
         return "low"
 
     # amd
     if gpu["type"] == "amd":
         vram = gpu["vram_gb"]
-        if vram >= 40:
+        if vram >= 24:
             return "high"
-        elif vram >= 8:
+        elif vram >= 12:
             return "mid"
         return "low"
 
-    # intel integrated - no dedicated VRAM, cpu inference only
-    if gpu["type"] == "intel_integrated":
-        if ram >= 32:
-            return "mid"
-        return "low"
-
-    # unknown gpu, go by RAM
-    if ram >= 48:
+    # intel integrated or unknown - go by RAM
+    if ram >= 32:
         return "mid"
     return "low"
 
@@ -371,6 +368,13 @@ def get_model_config() -> dict:
     if saved and saved.get("tier") in TIERS:
         tier_name = saved["tier"]
         tier = TIERS[tier_name]
+        # if model changed (e.g. upgraded to gemma4), re-prompt
+        if saved.get("model") and saved["model"] != tier["model"]:
+            print(f"\n  Models have been updated. Old: {saved['model']} -> New: {tier['model']}")
+            old_model = saved["model"]
+            choice = prompt_user_for_tier(old_model=old_model)
+            tier = TIERS[choice]
+            return {"model": tier["model"], "options": tier["options"], "tier": choice}
         return {"model": tier["model"], "options": tier["options"], "tier": tier_name}
 
     # pass the old model name so it can be cleaned up if switching

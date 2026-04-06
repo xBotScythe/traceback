@@ -3,10 +3,10 @@
 OLLAMA_BASE_URL = "http://localhost:11434"
 
 # these get overwritten by setup.py on first run
-OLLAMA_MODEL = "llama3.1:8b"
+OLLAMA_MODEL = "gemma4:e4b"
 OLLAMA_OPTIONS = {
     "temperature": 0.1,
-    "num_ctx": 8192,
+    "num_ctx": 16384,
     "num_predict": 4096,
 }
 
