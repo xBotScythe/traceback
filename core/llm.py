@@ -164,18 +164,20 @@ def ensure_ready():
 
 
 def ask(prompt: str, system: str = "", format: str = "",
-        stream_to=None) -> str:
+        stream_to=None, options: dict = None) -> str:
     """Send a prompt to Ollama and return the response text.
 
     stream_to: optional callable that receives each text chunk as it arrives.
                The full text is still returned at the end.
     format: set to "json" to force JSON output from the model.
+    options: override specific OLLAMA_OPTIONS keys for this request.
     """
+    merged_options = {**config.OLLAMA_OPTIONS, **(options or {})}
     payload = {
         "model": config.OLLAMA_MODEL,
         "prompt": prompt,
         "stream": stream_to is not None,
-        "options": config.OLLAMA_OPTIONS,
+        "options": merged_options,
     }
     if system:
         payload["system"] = system
