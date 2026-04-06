@@ -129,16 +129,24 @@ def ensure_ready():
         _pull_model()
 
 
-def ask(prompt: str, system: str = "") -> str:
-    """Send a prompt to Ollama and return the response text."""
+def ask(prompt: str, system: str = "", format: str = "",
+        stream_to=None) -> str:
+    """Send a prompt to Ollama and return the response text.
+
+    stream_to: optional callable that receives each text chunk as it arrives.
+               The full text is still returned at the end.
+    format: set to "json" to force JSON output from the model.
+    """
     payload = {
         "model": config.OLLAMA_MODEL,
         "prompt": prompt,
-        "stream": False,
+        "stream": stream_to is not None,
         "options": config.OLLAMA_OPTIONS,
     }
     if system:
         payload["system"] = system
+    if format:
+        payload["format"] = format
 
     data = json.dumps(payload).encode()
     req = urllib.request.Request(
@@ -149,6 +157,8 @@ def ask(prompt: str, system: str = "") -> str:
 
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
+            if stream_to is not None:
+                return _read_stream(resp, stream_to)
             result = json.loads(resp.read())
             text = result.get("response", "").strip()
             return _strip_markdown(text)
@@ -156,6 +166,26 @@ def ask(prompt: str, system: str = "") -> str:
         raise ConnectionError(f"Ollama not reachable: {e}") from e
     except json.JSONDecodeError:
         raise RuntimeError("Ollama returned invalid JSON")
+
+
+def _read_stream(resp, callback) -> str:
+    """Read a streaming Ollama response, calling back with each chunk."""
+    full_text = []
+    for line in resp:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            chunk = json.loads(line)
+            token = chunk.get("response", "")
+            if token:
+                full_text.append(token)
+                callback(token)
+            if chunk.get("done"):
+                break
+        except json.JSONDecodeError:
+            continue
+    return _strip_markdown("".join(full_text).strip())
 
 
 def _strip_markdown(text: str) -> str:

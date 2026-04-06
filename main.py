@@ -29,6 +29,11 @@ def _clear():
     sys.stdout.write("\r" + " " * 60 + "\r")
     sys.stdout.flush()
 
+def _stream_print(token: str):
+    """Callback for streaming LLM output to the terminal."""
+    sys.stdout.write(token)
+    sys.stdout.flush()
+
 
 def _resolve_pronouns(text: str, session) -> str:
     """Replace the first pronoun reference with the last target.
@@ -167,7 +172,8 @@ def run_lookup(intent: dict, session, user_input: str):
         if enrich.get("results"):
             session.add_tool_result("web_search", value, enrich)
 
-    _thinking("Generating response...")
+    _clear()
+    print()
 
     conversation = session.get_conversation_context()
     knowledge = session.get_full_knowledge()
@@ -178,10 +184,10 @@ def run_lookup(intent: dict, session, user_input: str):
         conversation=conversation,
         full_knowledge=knowledge,
         web_enrichment=enrichment,
+        stream_to=_stream_print,
     )
-    _clear()
+    print("\n")
     session.add_assistant_message(response)
-    print(f"\n{response}\n")
 
 
 def handle_person_lookup(name: str, user_input: str, session):
@@ -200,13 +206,14 @@ def handle_person_lookup(name: str, user_input: str, session):
     session.add_tool_result("person_lookup", name, result_data)
     session.start_investigation(name, {"web": result_data})
 
-    _thinking("Analyzing results...")
+    _clear()
+    print()
 
     conversation = session.get_conversation_context()
-    response = investigate(result_data, name, user_input=user_input, conversation=conversation)
-    _clear()
+    response = investigate(result_data, name, user_input=user_input,
+                           conversation=conversation, stream_to=_stream_print)
+    print("\n")
     session.add_assistant_message(response)
-    print(f"\n{response}\n")
 
 
 def handle_investigation_reply(user_input: str, session, resolved: str):
@@ -246,12 +253,12 @@ def handle_investigation_reply(user_input: str, session, resolved: str):
         return
 
     # conversational follow-up about the investigation
-    _thinking("Thinking...")
-    conversation = session.get_conversation_context()
-    response = chat(user_input, conversation)
     _clear()
+    print()
+    conversation = session.get_conversation_context()
+    response = chat(user_input, conversation, stream_to=_stream_print)
+    print("\n")
     session.add_assistant_message(response)
-    print(f"\n{response}\n")
 
 
 def main():
@@ -322,13 +329,14 @@ def main():
             if intent["type"] in ("chat", "clarify"):
                 if intent.get("message", "").strip():
                     answer = intent["message"]
+                    session.add_assistant_message(answer)
+                    print(f"\n{answer}\n")
                 else:
-                    _thinking("Thinking...")
+                    print()
                     conversation = session.get_conversation_context()
-                    answer = chat(user_input, conversation)
-                    _clear()
-                session.add_assistant_message(answer)
-                print(f"\n{answer}\n")
+                    answer = chat(user_input, conversation, stream_to=_stream_print)
+                    print("\n")
+                    session.add_assistant_message(answer)
                 continue
 
             # person lookup starts an investigation

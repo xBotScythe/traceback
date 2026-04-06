@@ -241,7 +241,7 @@ def _relevance_filter(results: list, query: str, user_input: str,
 
 def format(tool_output: dict, user_input: str = "",
            conversation: str = "", full_knowledge: str = "",
-           web_enrichment: list = None) -> str:
+           web_enrichment: list = None, stream_to=None) -> str:
     results = tool_output.get("results", [])
     tool_name = tool_output.get("tool", "unknown")
     query = tool_output.get("query", "")
@@ -278,13 +278,13 @@ def format(tool_output: dict, user_input: str = "",
     system = TOOL_PROMPTS.get(tool_name, SUMMARY_FALLBACK)
 
     try:
-        return llm.ask(prompt, system=system)
+        return llm.ask(prompt, system=system, stream_to=stream_to)
     except (ConnectionError, RuntimeError):
         return _fallback_format(tool_output)
 
 
 def investigate(results: dict, name: str, user_input: str = "",
-                conversation: str = "") -> str:
+                conversation: str = "", stream_to=None) -> str:
     """Present person search results as numbered picks."""
     result_list = results.get("results", [])
     result_list = _relevance_filter(result_list, name, user_input, conversation)
@@ -300,17 +300,17 @@ def investigate(results: dict, name: str, user_input: str = "",
         prompt += f"\n\nConversation so far:\n{_trim(conversation, _budget('conversation'))}"
 
     try:
-        return llm.ask(prompt, system=INVESTIGATE_SYSTEM)
+        return llm.ask(prompt, system=INVESTIGATE_SYSTEM, stream_to=stream_to)
     except (ConnectionError, RuntimeError):
         return _fallback_format(results)
 
 
 
-def chat(user_input: str, conversation: str) -> str:
+def chat(user_input: str, conversation: str, stream_to=None) -> str:
     conv = _trim(conversation, _budget("conversation"))
     prompt = f"Conversation:\n{conv}\n\nUser: {user_input}"
     try:
-        response = llm.ask(prompt, system=CHAT_SYSTEM)
+        response = llm.ask(prompt, system=CHAT_SYSTEM, stream_to=stream_to)
         return response if response.strip() else "Not sure what to make of that. Try a username, email, or domain lookup."
     except (ConnectionError, RuntimeError):
         return "Something went wrong. Try again."
