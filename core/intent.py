@@ -56,7 +56,7 @@ def parse(user_input: str, session_context: str = "") -> dict:
     prompt += f"User: {user_input}"
 
     try:
-        raw = llm.ask(prompt, system=SYSTEM_PROMPT,
+        raw = llm.ask(prompt, system=SYSTEM_PROMPT, format="json",
                       options={"num_ctx": 2048, "num_predict": 128})
 
         # extract JSON from anywhere in the response

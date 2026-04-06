@@ -164,16 +164,11 @@ def ensure_ready():
 
 
 def warmup():
-    """Load the model into memory in the background so the first query is fast."""
-    import threading
-
-    def _ping():
-        try:
-            ask(".", options={"num_predict": 1, "num_ctx": 512})
-        except Exception:
-            pass
-
-    threading.Thread(target=_ping, daemon=True).start()
+    """Load the model into memory so the first query is fast."""
+    try:
+        ask(".", options={"num_predict": 1, "num_ctx": 512})
+    except Exception:
+        pass
 
 
 def ask(prompt: str, system: str = "", format: str = "",
