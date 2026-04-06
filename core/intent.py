@@ -56,25 +56,14 @@ def parse(user_input: str, session_context: str = "") -> dict:
     prompt += f"User: {user_input}"
 
     try:
-        raw = llm.ask(prompt, system=SYSTEM_PROMPT)
-
-        # strip markdown fences if the LLM wraps output
-        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        raw = re.sub(r"\s*```$", "", raw.strip())
-
-        # find the first JSON object in the response
-        match = re.search(r"\{[^}]+\}", raw, re.DOTALL)
-        if not match:
-            return {"type": "chat", "value": "", "message": raw}
-
-        intent = json.loads(match.group())
+        raw = llm.ask(prompt, system=SYSTEM_PROMPT, format="json")
+        intent = json.loads(raw)
 
         valid_types = ("username_lookup", "email_lookup", "domain_lookup",
                        "person_lookup", "phone_lookup", "web_search", "clarify", "chat")
         if intent.get("type") not in valid_types:
-            return {"type": "chat", "value": "", "message": raw}
+            return {"type": "chat", "value": "", "message": ""}
 
-        # clean up value
         value = intent.get("value", "").strip()
         if intent.get("type") == "username_lookup":
             value = value.lstrip("@")
