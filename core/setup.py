@@ -19,13 +19,13 @@ TIERS = {
     "mid": {
         "model": "gemma4:26b",
         "label": "Mid",
-        "desc": "Recommended. MoE ~18GB download, 256K context. 16GB+ RAM.",
+        "desc": "Recommended. MoE ~18GB download, 256K context. 20GB+ RAM.",
         "options": {"temperature": 0.1, "num_ctx": 32768, "num_predict": 4096},
     },
     "high": {
         "model": "gemma4:31b",
         "label": "High",
-        "desc": "Best accuracy. Dense 31B, ~20GB download, 256K context. 24GB+ RAM.",
+        "desc": "Best accuracy. Dense 31B, ~20GB download, 256K context. 32GB+ RAM.",
         "options": {"temperature": 0.1, "num_ctx": 65536, "num_predict": 8192},
     },
 }
