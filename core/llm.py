@@ -163,6 +163,19 @@ def ensure_ready():
         _pull_model()
 
 
+def warmup():
+    """Load the model into memory in the background so the first query is fast."""
+    import threading
+
+    def _ping():
+        try:
+            ask(".", options={"num_predict": 1, "num_ctx": 512})
+        except Exception:
+            pass
+
+    threading.Thread(target=_ping, daemon=True).start()
+
+
 def ask(prompt: str, system: str = "", format: str = "",
         stream_to=None, options: dict = None) -> str:
     """Send a prompt to Ollama and return the response text.
@@ -178,6 +191,7 @@ def ask(prompt: str, system: str = "", format: str = "",
         "prompt": prompt,
         "stream": stream_to is not None,
         "options": merged_options,
+        "keep_alive": -1,
     }
     if system:
         payload["system"] = system

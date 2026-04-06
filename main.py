@@ -270,6 +270,7 @@ def main():
 
     print(status("Checking Ollama setup..."))
     llm.ensure_ready()
+    llm.warmup()
     print(success("Ready.") + "\n")
 
     safety = SafetyFilter()
