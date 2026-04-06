@@ -169,7 +169,7 @@ def run_lookup(intent: dict, session, user_input: str):
     """Run primary tool + any supplementary web searches, then summarize."""
     value = intent["value"]
 
-    escalation = session.check_escalation(value)
+    escalation = session.check_escalation(value, tool_type=intent["type"])
     if escalation:
         print(f"\n{blocked(escalation)}\n")
         return
@@ -209,7 +209,7 @@ def run_lookup(intent: dict, session, user_input: str):
 
 def handle_person_lookup(name: str, user_input: str, session):
     """Search for a real person by name, then start interactive investigation."""
-    escalation = session.check_escalation(name)
+    escalation = session.check_escalation(name, tool_type="person_lookup")
     if escalation:
         print(f"\n{blocked(escalation)}\n")
         return

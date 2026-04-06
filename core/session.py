@@ -4,8 +4,9 @@ import json
 import re
 from collections import defaultdict
 
-ESCALATION_LIMIT = 5  # max different tool types on one target
-SEARCH_SPAM_LIMIT = 20  # max total lookups on one target (any type)
+ESCALATION_LIMIT = 5     # max distinct tool types on one target before blocking
+SEARCH_SPAM_LIMIT = 20   # max total lookups on one target before blocking
+WEB_SEARCH_LIMIT = 8     # max web searches referencing a blocked/heavy target before warning
 
 ESCALATION_WARNING = (
     "[notice] You've used a lot of different tools on this target. "
@@ -15,6 +16,11 @@ ESCALATION_WARNING = (
 SPAM_WARNING = (
     "[notice] You've run a lot of searches on this target. "
     "Try a different approach or look into a different lead."
+)
+
+WEB_SEARCH_WARNING = (
+    "[notice] You've run a lot of web searches on this target already. "
+    "Consider looking into a different lead."
 )
 
 MAX_CONVERSATION_TURNS = 20
@@ -221,19 +227,51 @@ class Session:
 
     # escalation
 
-    def check_escalation(self, value: str) -> str | None:
+    def _target_for_query(self, query: str) -> str | None:
+        """If a web search query mentions a known tracked target, return that target's key."""
+        lower = query.lower()
+        for key in self._lookups:
+            if len(key) >= 3 and key in lower:
+                return key
+        return None
+
+    def check_escalation(self, value: str, tool_type: str = "") -> str | None:
         key = self._normalize(value)
-        if key in self._blocked:
+
+        # for web searches, check if the query is about a known target
+        target_key = key
+        if tool_type == "web_search":
+            target_key = self._target_for_query(value) or key
+
+        # blocked target: hard stop for tool lookups, soft warn for web searches
+        if target_key in self._blocked:
+            if tool_type == "web_search":
+                web_count = sum(
+                    1 for e in self._lookups.get(target_key, [])
+                    if e["type"] == "web_search"
+                )
+                if web_count >= WEB_SEARCH_LIMIT:
+                    return WEB_SEARCH_WARNING
+                return None
             return ESCALATION_WARNING
-        entries = self._lookups.get(key, [])
+
+        entries = self._lookups.get(target_key, [])
         tool_types = {entry["type"] for entry in entries}
+
         if len(tool_types) >= ESCALATION_LIMIT:
-            self._blocked.add(key)
+            self._blocked.add(target_key)
             return ESCALATION_WARNING
-        # also catch spamming the same tool type on one target
+
         if len(entries) >= SEARCH_SPAM_LIMIT:
-            self._blocked.add(key)
+            self._blocked.add(target_key)
             return SPAM_WARNING
+
+        # web searches on a non-blocked target get their own softer cap
+        if tool_type == "web_search" and target_key != key:
+            web_count = sum(1 for e in entries if e["type"] == "web_search")
+            if web_count >= WEB_SEARCH_LIMIT:
+                return WEB_SEARCH_WARNING
+
         return None
 
 
